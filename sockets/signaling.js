@@ -1,6 +1,17 @@
+const { sanitizeInput } = require("../middleware/sanitize");
+
 module.exports = (io, redisClient) => {
   io.on("connection", (socket) => {
     console.log(`User connected: ${socket.id}`);
+    const sanitizedId = sanitizeInput(socket.id);
+
+    socket.on("signal", (data) => {
+      const sanitizedData = {
+        ...data,
+        to: sanitizeInput(data.to),
+      };
+      io.to(sanitizedData.to).emit("signal", sanitizedData);
+    });
 
     // Handle user joining the queue
     socket.on("join", async () => {
@@ -32,10 +43,6 @@ module.exports = (io, redisClient) => {
       }
     });
 
-    // Handle WebRTC signaling
-    socket.on("signal", (data) => {
-      io.to(data.to).emit("signal", data);
-    });
 
     // Handle user disconnection
     socket.on("disconnect", async () => {
