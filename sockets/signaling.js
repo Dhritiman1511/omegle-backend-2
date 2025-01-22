@@ -1,9 +1,47 @@
-const { sanitizeInput } = require("../middleware/sanitize");
-
 module.exports = (io, redisClient) => {
   io.on("connection", (socket) => {
     console.log(`User connected: ${socket.id}`);
     const sanitizedId = sanitizeInput(socket.id);
+
+    socket.on("join", async () => {
+      try {
+        const timeout = setTimeout(async () => {
+          socket.emit("timeout", "No match found. Please try again later.");
+          await redisClient.lrem("waitingUsers", 0, sanitizedId);
+        }, 30000);
+
+        const waitingUser = await redisClient.lpop("waitingUsers");
+        if (waitingUser) {
+          const sanitizedWaitingUser = sanitizeInput(waitingUser);
+          clearTimeout(timeout);
+          socket.emit("paired", sanitizedWaitingUser);
+          io.to(sanitizedWaitingUser).emit("paired", sanitizedId);
+
+          await redisClient.set(`paired:${sanitizedId}`, sanitizedWaitingUser);
+          await redisClient.set(`paired:${sanitizedWaitingUser}`, sanitizedId);
+        } else {
+          await redisClient.rpush("waitingUsers", sanitizedId);
+        }
+      } catch (error) {
+        console.error("Error handling join event:", error);
+      }
+    });
+
+    socket.on("disconnect", async () => {
+      try {
+        const pairedUser = await redisClient.get(`paired:${sanitizedId}`);
+        if (pairedUser) {
+          const sanitizedPairedUser = sanitizeInput(pairedUser);
+          io.to(sanitizedPairedUser).emit("partner-disconnected");
+          await redisClient.del(`paired:${sanitizedId}`);
+          await redisClient.del(`paired:${sanitizedPairedUser}`);
+        }
+        await redisClient.lrem("waitingUsers", 0, sanitizedId);
+        console.log(`User disconnected: ${sanitizedId}`);
+      } catch (error) {
+        console.error("Error handling disconnect:", error);
+      }
+    });
 
     socket.on("signal", (data) => {
       const sanitizedData = {
@@ -11,56 +49,6 @@ module.exports = (io, redisClient) => {
         to: sanitizeInput(data.to),
       };
       io.to(sanitizedData.to).emit("signal", sanitizedData);
-    });
-
-    // Handle user joining the queue
-    socket.on("join", async () => {
-      try {
-        // Set a timeout for waiting
-        const timeout = setTimeout(async () => {
-          // Notify the user they are waiting too long
-          socket.emit("timeout", "No match found. Please try again later.");
-
-          // Remove user from the waiting queue
-          await redisClient.lrem("waitingUsers", 0, socket.id);
-        }, 30000); // 30 seconds
-
-        // Matchmaking logic
-        const waitingUser = await redisClient.lpop("waitingUsers");
-        if (waitingUser) {
-          clearTimeout(timeout); // Cancel timeout on match
-          socket.emit("paired", waitingUser);
-          io.to(waitingUser).emit("paired", socket.id);
-
-          // Save pairing in Redis
-          await redisClient.set(`paired:${socket.id}`, waitingUser);
-          await redisClient.set(`paired:${waitingUser}`, socket.id);
-        } else {
-          await redisClient.rpush("waitingUsers", socket.id);
-        }
-      } catch (error) {
-        console.error("Error handling join event:", error);
-      }
-    });
-
-
-    // Handle user disconnection
-    socket.on("disconnect", async () => {
-      try {
-        // Notify the paired user about disconnection
-        const pairedUser = await redisClient.get(`paired:${socket.id}`);
-        if (pairedUser) {
-          io.to(pairedUser).emit("partner-disconnected");
-          await redisClient.del(`paired:${socket.id}`);
-          await redisClient.del(`paired:${pairedUser}`);
-        }
-
-        // Remove from waiting queue if applicable
-        await redisClient.lrem("waitingUsers", 0, socket.id);
-        console.log(`User disconnected: ${socket.id}`);
-      } catch (error) {
-        console.error("Error handling disconnect:", error);
-      }
     });
   });
 };

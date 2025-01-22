@@ -6,9 +6,9 @@ const { sanitizeMiddleware } = require('./middleware/sanitize');
 
 const app = express();
 
-app.use(sanitizeMiddleware);
 app.use(cors());
 app.use(express.json());
+app.use(sanitizeMiddleware);
 
 app.use('/api/chat', chatRoutes);
 
